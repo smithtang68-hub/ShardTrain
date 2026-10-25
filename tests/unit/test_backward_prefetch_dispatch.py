@@ -43,6 +43,7 @@ def test_fixed_dispatch_real_autograd_sequence_and_dense_oracle(kind, reshard):
 
         def loss(module):
             return module(ids, labels=ids).loss
+
     reference = copy.deepcopy(model)
     runtime = ShardedRuntime(
         reshard_after_forward=reshard,
@@ -72,19 +73,19 @@ def test_fixed_dispatch_real_autograd_sequence_and_dense_oracle(kind, reshard):
         boundaries = [
             e for e in events if e["event_type"] == "prefetch_boundary" and e["phase"] == "BWD"
         ]
-        assert [e["current_unit"] for e in boundaries] == list(
-            range(len(runtime.units) - 1, 0, -1)
-        )
+        assert [e["current_unit"] for e in boundaries] == list(range(len(runtime.units) - 1, 0, -1))
         for boundary in boundaries[1:]:
             owner = boundary["gradient_owner"]
             assert boundary["scheduling_boundary"] == "previous_gradient_dispatch"
             assert owner == boundary["current_unit"] + 1 == boundary["target_unit"] + 2
             issued = [
-                i for i, e in enumerate(events)
+                i
+                for i, e in enumerate(events)
                 if e["event_type"] == "gradient_bucket_issued" and e["unit_id"] == owner
             ]
             consumed = [
-                i for i, e in enumerate(events)
+                i
+                for i, e in enumerate(events)
                 if e["event_type"] == "gradient_bucket_consumed" and e["unit_id"] == owner
             ]
             assert max(issued) < events.index(boundary) < min(consumed)
@@ -148,12 +149,20 @@ def _delayed_dispatch_runtime(monkeypatch):
         unit = UnitState(runtime, uid, None)
         for name, gradient in zip(("norm", "matrix"), gradients, strict=True):
             spec = ParameterSpec.create(
-                f"{uid}.{name}", uid, gradient, gradient.shape,
-                "replicated" if name == "norm" else "column", 2,
+                f"{uid}.{name}",
+                uid,
+                gradient,
+                gradient.shape,
+                "replicated" if name == "norm" else "column",
+                2,
             )
-            unit.handles.append(SimpleNamespace(
-                spec=spec, local_shard=initialize_shard(gradient, spec, 0), forward_uses=0,
-            ))
+            unit.handles.append(
+                SimpleNamespace(
+                    spec=spec,
+                    local_shard=initialize_shard(gradient, spec, 0),
+                    forward_uses=0,
+                )
+            )
         runtime.units.append(unit)
     runtime.begin_step(0)
     for unit in runtime.units:
@@ -230,12 +239,15 @@ def test_entry_has_no_dynamic_fallback_and_token_cannot_be_reused(monkeypatch, i
     assert current.backward_calls == 0
 
 
-@pytest.mark.parametrize("policy,sp,async_rs,prefetch", [
-    ("conservative", True, True, True),
-    ("stream_ordered", False, True, True),
-    ("stream_ordered", True, False, True),
-    ("stream_ordered", True, True, False),
-])
+@pytest.mark.parametrize(
+    "policy,sp,async_rs,prefetch",
+    [
+        ("conservative", True, True, True),
+        ("stream_ordered", False, True, True),
+        ("stream_ordered", True, False, True),
+        ("stream_ordered", True, True, False),
+    ],
+)
 def test_other_modes_keep_existing_prefetch_source(policy, sp, async_rs, prefetch):
     runtime = ShardedRuntime(
         communication_policy=policy, async_grad_rs=async_rs, backward_prefetch=prefetch

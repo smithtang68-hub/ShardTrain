@@ -33,9 +33,7 @@ def test_gradient_communicators_have_independent_lifetimes_and_fixed_creation(mo
     monkeypatch.setattr(dist, "is_available", lambda: True)
     monkeypatch.setattr(dist, "is_gloo_available", lambda: True)
     monkeypatch.setattr(dist, "is_initialized", lambda: state["initialized"])
-    monkeypatch.setattr(
-        dist, "init_process_group", lambda **kwargs: state.update(initialized=True)
-    )
+    monkeypatch.setattr(dist, "init_process_group", lambda **kwargs: state.update(initialized=True))
 
     def new_group(*, ranks, **kwargs):
         group = object()
@@ -50,9 +48,7 @@ def test_gradient_communicators_have_independent_lifetimes_and_fixed_creation(mo
     monkeypatch.setattr(dist, "new_group", new_group)
     monkeypatch.setattr(dist, "destroy_process_group", destroy)
     ctx = DistributedContext(parallel, worker, 5, logging.getLogger("context_test"))
-    assert [ranks for ranks, _ in created] == [
-        ranks for _, ranks in ctx.topology.creation_order
-    ]
+    assert [ranks for ranks, _ in created] == [ranks for _, ranks in ctx.topology.creation_order]
     assert ctx.tp_group is created[0][1]
     assert ctx.tp_grad_group is created[4][1]
     assert ctx.fsdp_group is created[3][1]

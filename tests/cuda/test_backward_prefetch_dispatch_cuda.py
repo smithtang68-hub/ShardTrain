@@ -64,7 +64,8 @@ def test_cuda_dispatch_preserves_normal_autograd_leaf_grads_and_own_ag_consumers
     torch.cuda.synchronize()
     events = runtime.comm.events
     boundaries = [
-        e for e in events
+        e
+        for e in events
         if e["event_type"] == "prefetch_boundary"
         and e.get("scheduling_boundary") == "previous_gradient_dispatch"
     ]
@@ -72,7 +73,8 @@ def test_cuda_dispatch_preserves_normal_autograd_leaf_grads_and_own_ag_consumers
     for boundary in boundaries:
         owner = boundary["gradient_owner"]
         consumed = next(
-            e for e in events
+            e
+            for e in events
             if e["event_type"] == "gradient_bucket_consumed" and e["unit_id"] == owner
         )
         assert events.index(boundary) < events.index(consumed)
@@ -83,9 +85,9 @@ def test_cuda_dispatch_preserves_normal_autograd_leaf_grads_and_own_ag_consumers
             assert handle.grad_step == 0 and handle.grad_ready_event is not None
     for consumer in copy_out:
         allocation = next(
-            e for e in events
-            if e["event_type"] == "buffer_allocate"
-            and e["buffer_id"] == consumer["buffer_id"]
+            e
+            for e in events
+            if e["event_type"] == "buffer_allocate" and e["buffer_id"] == consumer["buffer_id"]
         )
         assert allocation["unit_id"] == consumer["unit_id"]
         assert allocation["materialization_generation"] == consumer["materialization_generation"]

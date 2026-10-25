@@ -24,9 +24,7 @@ def _launch_order_capabilities():
     # These version queries do not create a device context or launch GPU work.
     major = cuda_build.split(".")[0]
     names = (
-        (f"cudart64_{major}.dll",)
-        if os.name == "nt"
-        else (f"libcudart.so.{major}", "libcudart.so")
+        (f"cudart64_{major}.dll",) if os.name == "nt" else (f"libcudart.so.{major}", "libcudart.so")
     )
     library = None
     for name in names:

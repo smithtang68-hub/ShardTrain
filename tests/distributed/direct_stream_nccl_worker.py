@@ -226,8 +226,15 @@ def run(args):
                 call_id = len(pending)
                 group, members = groups[spec[0]]
                 row, observed, expected = submit(
-                    comm, producer, consumers[call_id % 2], group, members,
-                    spec, call_id, args.numel, rank,
+                    comm,
+                    producer,
+                    consumers[call_id % 2],
+                    group,
+                    members,
+                    spec,
+                    call_id,
+                    args.numel,
+                    rank,
                 )
                 pending.append((row, observed, expected))
                 allocation_pressure(producer, device, args.numel, rank)
@@ -249,9 +256,11 @@ def run(args):
             raise AssertionError("stream_ordered mode inserted a GPU PG-order wait")
         comm.gpu_wait_timings()
         result.update(
-            status="passed", live_buffers=len(comm.live_buffers),
+            status="passed",
+            live_buffers=len(comm.live_buffers),
             outstanding_last_reads=len(comm.pending_last_reads),
-            checked_calls=len(pending), pg_order_completion_waits=0,
+            checked_calls=len(pending),
+            pg_order_completion_waits=0,
             max_memory_allocated=torch.cuda.max_memory_allocated(device),
             max_memory_reserved=torch.cuda.max_memory_reserved(device),
         )

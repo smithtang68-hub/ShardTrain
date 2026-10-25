@@ -42,16 +42,16 @@ def test_replicated_gradients_use_distinct_group_and_can_run_on_compute(monkeypa
         source, kind="tp_norm_allreduce", group_role="norm_gradient_bucket", channel="compute"
     )
     activation_sum = tp.sum(source, kind="sp_rs_math_allreduce")
-    second_norm = tp.sum(
-        source, kind="replicated_embedding_sum", group_role="replicated_gradient"
-    )
+    second_norm = tp.sum(source, kind="replicated_embedding_sum", group_role="replicated_gradient")
     for result in (norm, activation_sum, second_norm):
         torch.testing.assert_close(result, 2 * source)
         assert result.data_ptr() != source.data_ptr()
     torch.testing.assert_close(source, torch.arange(4.0))
     assert called == [(gradient, False), (activation, False), (gradient, False)]
     assert [(ticket.pg_id, ticket.pg_local_seq) for ticket in comm.tickets] == [
-        ("tp_grad", 0), ("tp", 0), ("tp_grad", 1)
+        ("tp_grad", 0),
+        ("tp", 0),
+        ("tp_grad", 1),
     ]
     assert [ticket.issue_stream for ticket in comm.tickets] == ["compute", "sp_rs", "sp_rs"]
     assert all(ticket.status == "CONSUMABLE" for ticket in comm.tickets)
@@ -76,8 +76,7 @@ def test_gradient_group_membership_and_communicator_alias_are_rejected(monkeypat
 def test_acceptance_audit_rejects_gradient_group_sequence_divergence(role, peer):
     row = (0, "gradient", 8, "torch.float32", 1, "BWD", 0, (8,), (4,))
     orders = [
-        {name: [row] for name in ("world", "tp", "fsdp", "tp_grad", "fsdp_grad")}
-        for _ in range(4)
+        {name: [row] for name in ("world", "tp", "fsdp", "tp_grad", "fsdp_grad")} for _ in range(4)
     ]
     audit.audit_pg_sequences(orders, 2, 2)
     changed = deepcopy(orders)

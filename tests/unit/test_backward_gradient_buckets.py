@@ -89,9 +89,7 @@ def test_small_norm_sum_does_not_consume_pending_main_rs(monkeypatch, degree, ra
     assert sums == [("norm_gradient_bucket", "compute"), (None, "sp_rs")]
     assert not comm.live_buffers
     assert all(work.waited for work in works)
-    issued = [
-        row["bucket"] for row in comm.events if row["event_type"] == "gradient_bucket_issued"
-    ]
+    issued = [row["bucket"] for row in comm.events if row["event_type"] == "gradient_bucket_issued"]
     assert issued == ["norm", "main"]
     assert [ticket.group_role for ticket in comm.tickets] == (
         ["norm_gradient_bucket", "main_gradient_bucket"] if degree > 1 else []
