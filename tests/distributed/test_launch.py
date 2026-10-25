@@ -41,6 +41,16 @@ def launch(command, directory, timeout=90):
         # FileStore rendezvous must also disable the launcher's shared TCPStore.
         env["TORCH_DISABLE_SHARE_RDZV_TCP_STORE"] = "1"
     argv = [sys.executable, *command, "--debug.output_dir", str(directory)]
+    process_options = {}
+    if sys.platform == "win32":
+        # Torchrun cleanup broadcasts CTRL_C_EVENT within its console. Give the
+        # worker tree a hidden console so a failing worker cannot interrupt pytest.
+        startup = subprocess.STARTUPINFO()
+        startup.dwFlags |= subprocess.STARTF_USESHOWWINDOW
+        startup.wShowWindow = subprocess.SW_HIDE
+        process_options.update(creationflags=subprocess.CREATE_NEW_CONSOLE, startupinfo=startup)
+    else:
+        process_options["start_new_session"] = True
     process = subprocess.Popen(
         argv,
         cwd=ROOT,
@@ -48,7 +58,7 @@ def launch(command, directory, timeout=90):
         stdout=subprocess.PIPE,
         stderr=subprocess.PIPE,
         text=True,
-        start_new_session=sys.platform != "win32",
+        **process_options,
     )
     try:
         stdout, stderr = process.communicate(timeout=timeout)

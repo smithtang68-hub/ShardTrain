@@ -5,6 +5,7 @@ do not claim Tensor Core, NCCL or V100 performance validation.
 """
 
 import copy
+from contextlib import contextmanager
 from types import SimpleNamespace
 
 import pytest
@@ -50,6 +51,24 @@ def require_device(device, dtype):
             pytest.skip("Native CUDA BF16 unavailable; do not enable V100 BF16 emulation")
 
 
+@contextmanager
+def operator_compute(group):
+    """Order fixture inputs and gradient checks across the caller and compute streams."""
+    comm = group.comm
+    if not comm.streams:
+        with comm.stream_context("compute"):
+            yield
+        return
+    caller = torch.cuda.current_stream(comm.device)
+    compute = comm.streams["compute"]
+    compute.wait_stream(caller)
+    try:
+        with comm.stream_context("compute"):
+            yield
+    finally:
+        caller.wait_stream(compute)
+
+
 def fixture_operators(device, widths):
     group = RuntimeTPGroup(None, CommunicationCoordinator(device))
     unit = SimpleNamespace(annotate=lambda phase: None, prefetch_after_input=lambda *args: None)
@@ -78,7 +97,7 @@ def test_backward_gemms_use_forward_dtype_and_match_dense_autograd(
     reference_x = x.detach().clone().requires_grad_()
     reference_weights = [w.detach().clone().requires_grad_() for w in weights]
     reference_biases = [b.detach().clone().requires_grad_() for b in biases]
-    with group.comm.stream_context("compute"):
+    with operator_compute(group):
         with torch.autocast(device, dtype=compute_dtype, enabled=amp, cache_enabled=False):
             if operator == "qkv":
                 flat = tuple(value for pair in zip(weights, biases, strict=True) for value in pair)
@@ -135,7 +154,7 @@ def test_cuda_explicit_low_precision_without_autocast(dtype):
     torch.manual_seed(705)
     group, weights, _, providers = fixture_operators("cuda", (24,))
     x = torch.randn(2, 5, 16, device="cuda", dtype=dtype, requires_grad=True)
-    with group.comm.stream_context("compute"):
+    with operator_compute(group):
         output = QwenRowLinear.apply(x, weights[0], providers[0].weight_slot, group, False, True)
         loss = output.float().square().mean()
         with BackwardPrecision() as observed:
