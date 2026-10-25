@@ -138,6 +138,152 @@ def test_all_independent_async_switch_combinations_against_dense(tmp_path, flags
     check_run(tmp_path, 4, True)
 
 
+def assert_prefetch_boundaries(rows, step, sp, reshard, flags, layers=4):
+    def indices(event_type, **fields):
+        return [
+            index
+            for index, row in enumerate(rows)
+            if row["event_type"] == event_type
+            and all(row.get(key) == value for key, value in fields.items())
+        ]
+
+    def one(event_type, **fields):
+        found = indices(event_type, **fields)
+        assert len(found) == 1, (event_type, fields, found)
+        return found[0]
+
+    def generation(unit):
+        phase = "BWD" if reshard and unit < layers - 1 else "FWD"
+        return rows[one("materialize_issue", unit_id=unit, phase=phase)][
+            "materialization_generation"
+        ]
+
+    boundaries = indices("prefetch_boundary")
+    forward = indices("prefetch_boundary", phase="FWD")
+    backward = indices("prefetch_boundary", phase="BWD")
+    assert len(forward) == (layers - 1) * int(sp and flags[0])
+    assert len(backward) == (layers - 1) * int(flags[1])
+    assert len(boundaries) == len(forward) + len(backward)
+    assert [
+        (rows[index]["unit_id"], rows[index]["target_unit"], rows[index]["param_id"])
+        for index in forward
+    ] == (
+        [(unit, unit + 1, f"{unit}.attention.v_proj.weight") for unit in range(layers - 1)]
+        if sp and flags[0]
+        else []
+    )
+
+    # FSDP-only prefetch starts at unit entry, without an SP-input boundary event.
+    if not sp and flags[0]:
+        for unit in range(layers - 1):
+            assert (
+                one("unit_forward", unit_id=unit)
+                < one("materialize_issue", unit_id=unit + 1, phase="FWD")
+                < one("unit_forward", unit_id=unit + 1)
+            )
+
+    prefetch_end = {}
+    for index in boundaries:
+        boundary = rows[index]
+        phase, target = boundary["phase"], boundary["target_unit"]
+        following = rows[index + 1]
+        assert (following["unit_id"], following["phase"]) == (target, phase)
+        if phase == "BWD" and not reshard:
+            assert following["event_type"] == "prefetch_skipped_retained"
+            prefetch_end[index] = one("prefetch_skipped_retained", unit_id=target, phase=phase)
+            assert not indices("materialize_issue", unit_id=target, phase=phase)
+            assert not indices("collective_issue", unit_id=target, phase=phase, kind="fsdp_ag")
+        else:
+            assert following["event_type"] == "buffer_allocate"
+            assert following["owner"] == "fsdp_ag"
+            ag = one("collective_issue", unit_id=target, phase=phase, kind="fsdp_ag")
+            issued = one("materialize_issue", unit_id=target, phase=phase)
+            assert index < ag < issued
+            assert not indices("prefetch_skipped_retained", unit_id=target, phase=phase)
+            prefetch_end[index] = issued
+        entry = "unit_forward" if phase == "FWD" else "unit_pre_backward"
+        assert prefetch_end[index] < one(entry, unit_id=target)
+
+        if phase == "FWD" or (sp and not flags[2]):
+            previous = [
+                row
+                for row in rows[:index]
+                if row["event_type"] == "collective_issue"
+                and row["unit_id"] == boundary["unit_id"]
+                and row["phase"] == phase
+            ]
+            assert previous[-1]["kind"] == "sp_ag"
+            assert previous[-1]["group_role"] == ("qkv" if phase == "FWD" else "down_proj_row_dx")
+
+    dispatch = sp and flags[1] and flags[2]
+    tokens = indices("backward_prefetch_token")
+    if dispatch:
+        assert [
+            (
+                rows[index]["unit_id"],
+                rows[index]["current_unit"],
+                rows[index]["target_unit"],
+                rows[index]["gradient_owner"],
+                rows[index]["scheduling_boundary"],
+            )
+            for index in backward
+        ] == [
+            (layers - 1, layers - 1, layers - 2, None, "backward_gradient_dispatch_seed"),
+            *[
+                (owner, owner - 1, owner - 2, owner, "previous_gradient_dispatch")
+                for owner in range(layers - 1, 1, -1)
+            ],
+        ]
+        assert len(tokens) == layers - 1
+        for index in backward:
+            boundary = rows[index]
+            current, target = boundary["current_unit"], boundary["target_unit"]
+            assert boundary["token_step"] == step
+            token_index = one("backward_prefetch_token", current_unit=current)
+            token = rows[token_index]
+            for key in (
+                "unit_id",
+                "current_unit",
+                "target_unit",
+                "gradient_owner",
+                "scheduling_boundary",
+            ):
+                assert token[key] == boundary[key]
+            assert token["current_generation"] == generation(current)
+            assert token["target_generation"] == generation(target)
+            assert token["parameter_version"] == step
+            assert token["status"] == ("issued" if reshard else "retained")
+            assert prefetch_end[index] < token_index
+            if boundary["gradient_owner"] is None:
+                assert one("unit_pre_backward", unit_id=current) < index
+                current_ags = indices(
+                    "collective_issue", unit_id=current, phase="BWD", kind="sp_ag"
+                )
+                assert token_index < min(current_ags)
+            else:
+                owner = boundary["gradient_owner"]
+                assert owner == current + 1 == target + 2
+                issued = indices("gradient_bucket_issued", unit_id=owner)
+                consumed = indices("gradient_bucket_consumed", unit_id=owner)
+                assert [rows[i]["bucket"] for i in issued] == ["norm", "main"]
+                assert [rows[i]["bucket"] for i in consumed] == ["norm", "main"]
+                assert max(issued) < index < token_index < min(consumed)
+                assert token_index < one("unit_pre_backward", unit_id=current)
+    else:
+        assert not tokens
+        assert [(rows[i]["unit_id"], rows[i]["target_unit"]) for i in backward] == (
+            [(unit, unit - 1) for unit in range(layers - 1, 0, -1)] if flags[1] else []
+        )
+        for index in backward:
+            boundary = rows[index]
+            unit = boundary["unit_id"]
+            assert one("unit_pre_backward", unit_id=unit) < index
+            if sp:
+                assert boundary["param_id"] == f"{unit}.mlp.down_proj.weight"
+            else:
+                assert boundary["scheduling_boundary"] == "backward_unit_entry"
+
+
 @pytest.mark.distributed
 @pytest.mark.parametrize(
     "f,t,sp,reshard,flags",
@@ -167,23 +313,7 @@ def test_stream_ordered_prefetch_boundaries_reference_and_pg_sequence(
         ]
         for step in range(3):
             rows = [row for row in events if row["step_id"] == step]
-            boundaries = [row for row in rows if row["event_type"] == "prefetch_boundary"]
-            assert len(boundaries) == 3 * (int(flags[0]) + int(flags[1])) if sp else not boundaries
-            for boundary in boundaries:
-                phase = boundary["phase"]
-                suffix = "attention.v_proj.weight" if phase == "FWD" else "mlp.down_proj.weight"
-                assert boundary["param_id"].endswith(suffix)
-                index = rows.index(boundary)
-                previous = [
-                    row
-                    for row in rows[:index]
-                    if row["event_type"] == "collective_issue"
-                    and row["unit_id"] == boundary["unit_id"]
-                ]
-                assert previous[-1]["kind"] == "sp_ag"
-                target = rows[index + 1]
-                assert target["unit_id"] == boundary["target_unit"]
-                assert target["event_type"] in {"buffer_allocate", "prefetch_skipped_retained"}
+            assert_prefetch_boundaries(rows, step, sp, reshard, flags)
 
 
 def test_single_process_runtime_cli_and_training_metadata(tmp_path):
