@@ -1,0 +1,1 @@
+"""torchrun-compatible worker bootstrap."""

@@ -1,0 +1,23 @@
+model:
+  layers: 4
+  hidden_size: 128
+  num_heads: 8
+  mlp_hidden_size: 512
+  seq_len: 16
+parallel:
+  fsdp_degree: 2
+  tp_degree: 2
+  sp_enabled: true
+  device: cpu
+  backend: gloo
+runtime:
+  param_grouping: block
+  reshard_after_forward: true
+training:
+  lr: 0.01
+  steps: 3
+  local_batch_size: 2
+  accumulation_steps: 1
+debug:
+  output_dir: runs/runtime-cpu
+  distributed_timeout_seconds: 60

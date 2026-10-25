@@ -1,0 +1,2 @@
+# Preserve the numeric CSV contents across Windows and Linux checkouts.
+docs/release/*.csv -text

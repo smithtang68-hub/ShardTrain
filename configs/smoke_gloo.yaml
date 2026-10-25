@@ -1,0 +1,10 @@
+# Group/collective validation only; this is NOT FSDP training.
+parallel:
+  fsdp_degree: 2
+  tp_degree: 1
+  sp_enabled: false
+  device: cpu
+  backend: gloo
+debug:
+  distributed_timeout_seconds: 30
+  output_dir: runs/smoke-gloo

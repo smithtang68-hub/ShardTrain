@@ -1,0 +1,19 @@
+# M1: two-process tensor/sequence parallel training, without FSDP.
+model:
+  layers: 1
+  hidden_size: 128
+  num_heads: 4
+  mlp_hidden_size: 256
+  seq_len: 16
+parallel:
+  fsdp_degree: 1
+  tp_degree: 2
+  sp_enabled: true
+  device: cpu
+  backend: gloo
+training:
+  steps: 3
+  accumulation_steps: 1
+debug:
+  distributed_timeout_seconds: 30
+  output_dir: runs/tp-sp
